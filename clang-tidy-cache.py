@@ -1,4 +1,3 @@
-#!/usr/bin/python3
 
 import os
 import subprocess
@@ -207,7 +206,6 @@ class Cache:
             if compress:
                 log(9, "file[{}] -> hash[{}]: compressing fixes file[{}]".format(self.__source_file, h, cached_fixes_file))
                 os.system("gzip {}".format(cached_fixes_file))
-                os.system("cp {} {}".format(cached_fixes_file, "/home/raiden/prova.txt"))
 
     def __on_hit(self, path, stdout_file):
         log(7, "hit <- printing the stdout from[{}]".format(stdout_file))
@@ -230,6 +228,7 @@ class Cache:
 
         # additionally, if requested, save the fixes file where clang-tidy expects it
         if self.__fixes_file is not None:
+            os.system("rm -f {}".format(self.__fixes_file))
             cached_fixes_file = "{}/fixes.yaml".format(path)
             if not os.path.isfile(cached_fixes_file):
                 cached_fixes_file += ".gz"
@@ -295,6 +294,9 @@ class Cache:
 
 
 if __name__ == "__main__":
+    if "CTC_DEBUG" in os.environ:
+        LOG_LEVEL = os.environ["CTC_DEBUG"]
+
     cache = Cache(sys.argv[1:])
     cache.run()
     sys.exit(0)

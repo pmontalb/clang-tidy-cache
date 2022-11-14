@@ -2,14 +2,14 @@
 
 import os
 import sys
-import subprocess
+import shlex
 
 DEFAULT_CLANG_TIDY = "/usr/bin/clang-tidy"
 DEFAULT_CLANG_TIDY_CACHE = "~/bin/clang-tidy-cache"
 
 
 def main():
-    args = " ".join(sys.argv[1:])
+    args = " ".join(map(shlex.quote, sys.argv[1:]))
 
     clang_tidy_bin = DEFAULT_CLANG_TIDY
     if "CTC_CLANG_TIDY" in os.environ:
@@ -22,7 +22,7 @@ def main():
     if "CTC_CLANG_TIDY_CACHE" in os.environ:
         clang_tidy_cache_bin = os.environ["CTC_CLANG_TIDY_CACHE"]
 
-    return os.system("{} {} {}".format(clang_tidy_cache_bin, clang_tidy_bin, args))
+    return os.system("python {} {} {}".format(clang_tidy_cache_bin, clang_tidy_bin, args))
 
 
 if __name__ == "__main__":
