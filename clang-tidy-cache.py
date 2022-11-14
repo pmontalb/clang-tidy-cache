@@ -133,7 +133,12 @@ class Cache:
                 return False
 
         if not is_local_storage:
-            os.system("cp -r {} {}".format(path, path.replace(self.__remote_cache_dir, self.__cache_dir)))
+            source = path
+            dest = path.replace(self.__remote_cache_dir, self.__cache_dir)
+            dest += "/../"
+            log(5, "secondary storage hit: copying {} -> {}".format(source, dest))
+            os.system("mkdir -p {}".format(dest))
+            os.system("cp -r {} {}".format(source, dest))
         self.__on_hit(path, stdout_file, is_local_storage)
         return True
 
@@ -408,7 +413,7 @@ class Cache:
 
 if __name__ == "__main__":
     if "CTC_DEBUG" in os.environ:
-        LOG_LEVEL = os.environ["CTC_DEBUG"]
+        LOG_LEVEL = int(os.environ["CTC_DEBUG"])
 
     if "--show-stats" in sys.argv:
         Cache.show_stats()
