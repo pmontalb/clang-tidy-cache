@@ -1,4 +1,3 @@
-
 import os
 import subprocess
 import sys
@@ -35,7 +34,11 @@ class Cache:
             self.__cache_dir = os.environ["CTC_CACHE_DIR"]
         else:
             self.__cache_dir = "/tmp/ctc"
-        log(5, "cacheDir[{}]".format(self.__cache_dir))
+        if "CTC_REMOTE_CACHE_DIR" in os.environ:
+            self.__remote_cache_dir = os.environ["CTC_REMOTE_CACHE_DIR"]
+        else:
+            self.__remote_cache_dir = self.__cache_dir
+        log(5, "cache dir: local[{}] remote[{}]".format(self.__cache_dir, self.__remote_cache_dir))
 
         log(9, "processing args({})".format(args))
         self.__args = args
@@ -113,10 +116,10 @@ class Cache:
             log(-1, "[warn] no compiler args have been provided for src[{}]".format(self.__source_file))
             sys.exit(1)
 
-    def __get_path(self, h):
-        return "{}/{}/{}".format(self.__cache_dir, h[:2], h[2:])
+    def __get_path(self, cache_dir, h):
+        return "{}/{}/{}".format(cache_dir, h[:2], h[2:])
 
-    def __is_cached(self, path):
+    def __is_cached(self, path, is_local_storage):
         # miss
         if not os.path.isdir(path):
             log(3, "miss <- path[{}] doesn't exist".format(path))
@@ -129,7 +132,9 @@ class Cache:
             if not os.path.isfile(stdout_file):
                 return False
 
-        self.__on_hit(path, stdout_file)
+        if not is_local_storage:
+            os.system("cp -r {} {}".format(path, path.replace(self.__remote_cache_dir, self.__cache_dir)))
+        self.__on_hit(path, stdout_file, is_local_storage)
         return True
 
     def __get_preprocessor_args(self):
@@ -207,7 +212,7 @@ class Cache:
                 log(9, "file[{}] -> hash[{}]: compressing fixes file[{}]".format(self.__source_file, h, cached_fixes_file))
                 os.system("gzip {}".format(cached_fixes_file))
 
-    def __on_hit(self, path, stdout_file):
+    def __on_hit(self, path, stdout_file, is_local_storage):
         log(7, "hit <- printing the stdout from[{}]".format(stdout_file))
         # hit: print the stdout file to stdout
         if stdout_file.endswith(".gz"):
@@ -249,6 +254,7 @@ class Cache:
                     log(9, "hit <- compressing[{}]".format(stdout_file))
                     os.system("gzip {}".format(cached_fixes_file))
 
+        self.__update_cache_stats(hit=True, is_local_storage=is_local_storage)
         return True
 
     def __on_miss(self, path, h):
@@ -273,6 +279,36 @@ class Cache:
         # store fixes file
         self.__store_fixes_file(path, h)
 
+        self.__update_cache_stats(hit=False, is_local_storage=True)
+
+    def __update_cache_stats(self, hit, is_local_storage):
+        stats_file = "{}/stats.json".format(self.__cache_dir)
+        if os.path.isfile(stats_file):
+            with open(stats_file, "r") as f:
+                j = json.load(f)
+                if is_local_storage:
+                    _j = j["local"]
+                else:
+                    _j = j["remote"]
+                if hit:
+                    _j["hit"] += 1
+                else:
+                    _j["miss"] += 1
+        else:
+            with open(stats_file, "w") as f:
+                j = {"local": {"hit": 0, "miss": 0},
+                     "remote": {"hit": 0, "miss": 0}, }
+                if is_local_storage:
+                    _j = j["local"]
+                else:
+                    _j = j["remote"]
+                if hit:
+                    _j["hit"] += 1
+                else:
+                    _j["miss"] += 1
+        with open(stats_file, "w") as f:
+            json.dump(j, f)
+
     def run(self):
         if self.__compiler_args is None:
             log(-1, "[warn] no compiler args have been found")
@@ -284,18 +320,105 @@ class Cache:
         h = self.__get_hash()
         log(6, "file[{}] -> hash[{}]".format(self.__source_file, h))
 
-        path = self.__get_path(h)
-        if "CTC_FORCE" not in os.environ and self.__is_cached(path):
-            log(2, "file[{}] -> hash[{}]: hit!".format(self.__source_file, h))
-            # hit: nothing to do
-            return
+        path = self.__get_path(self.__cache_dir, h)
+        if "CTC_FORCE" not in os.environ:
+            # check local storage
+            if self.__is_cached(path, is_local_storage=True):
+                log(2, "file[{}] -> hash[{}]: local hit!".format(self.__source_file, h))
+                # hit: nothing to do
+                return
+
+            # check remote storage
+            if self.__remote_cache_dir != self.__cache_dir:
+                remote_path = self.__get_path(self.__remote_cache_dir, h)
+                if self.__is_cached(remote_path, is_local_storage=False):
+                    log(2, "file[{}] -> hash[{}]: remote hit!".format(self.__source_file, h))
+                    # hit: nothing to do
+                    return
 
         self.__on_miss(path, h)
+
+    @staticmethod
+    def show_stats():
+        if "CTC_CACHE_DIR" in os.environ:
+            cache_dir = os.environ["CTC_CACHE_DIR"]
+        else:
+            cache_dir = "/tmp/ctc"
+        if "CTC_REMOTE_CACHE_DIR" in os.environ:
+            remote_cache_dir = os.environ["CTC_REMOTE_CACHE_DIR"]
+        else:
+            remote_cache_dir = cache_dir
+
+        stats_file = "{}/stats.json".format(cache_dir)
+        if not os.path.isfile(stats_file):
+            print("*** No stats have been produced ***")
+            return
+
+        print("Stats File: {}".format(stats_file))
+        with open(stats_file, "r") as f:
+            j = json.load(f)
+            local_hits = int(j["local"]["hit"])
+            local_miss = int(j["local"]["miss"])
+            local_total = local_hits + local_miss
+            local_hit_pct = 100.0 * local_hits / (local_total + 1e-16)
+            local_miss_pct = 0 if local_total == 0 else 100.0 - local_hit_pct
+            print("* Local Storage")
+            print("*** Hits: {:5.2f}% ({} / {})".format(local_hit_pct, local_hits, local_total))
+            print("*** Miss: {:5.2f}% ({} / {})".format(local_miss_pct, local_miss, local_total))
+            print("*** Size: {}".format(subprocess.check_output(['du', '-sh', cache_dir]).split()[0].decode('utf-8')))
+
+            if remote_cache_dir != cache_dir:
+                remote_hits = int(j["remote"]["hit"])
+                remote_miss = int(j["remote"]["miss"])
+                remote_total = remote_hits + remote_miss
+                remote_hit_pct = 100.0 * remote_hits / (remote_total + 1e-16)
+                remote_miss_pct = 0 if remote_total == 0 else 100.0 - remote_hit_pct
+                print("* Remote Storage")
+                print("*** Hits: {:5.2f}% ({} / {})".format(remote_hit_pct, remote_hits, remote_total))
+                print("*** Miss: {:5.2f}% ({} / {})".format(remote_miss_pct, remote_miss, remote_total))
+                print("*** Size: {}".format(subprocess.check_output(['du', '-sh', remote_cache_dir]).split()[0].decode('utf-8')))
+
+    @staticmethod
+    def reset_stats():
+        if "CTC_CACHE_DIR" in os.environ:
+            cache_dir = os.environ["CTC_CACHE_DIR"]
+        else:
+            cache_dir = "/tmp/ctc"
+
+        stats_file = "{}/stats.json".format(cache_dir)
+        if not os.path.isfile(stats_file):
+            print("*** No stats have been produced ***")
+            return
+        with open(stats_file, "w") as f:
+            j = {"local" : {"hit": 0, "miss": 0},
+                 "remote": {"hit": 0, "miss": 0}, }
+        with open(stats_file, "w") as f:
+            json.dump(j, f)
+        print("*** Stats reset done ***")
+
+    @staticmethod
+    def reset_cache():
+        if "CTC_CACHE_DIR" in os.environ:
+            cache_dir = os.environ["CTC_CACHE_DIR"]
+        else:
+            cache_dir = "/tmp/ctc"
+        os.system("rm -r {}".format(cache_dir))
+        print("*** Cleared cache ***")
 
 
 if __name__ == "__main__":
     if "CTC_DEBUG" in os.environ:
         LOG_LEVEL = os.environ["CTC_DEBUG"]
+
+    if "--show-stats" in sys.argv:
+        Cache.show_stats()
+        sys.exit(0)
+    if "--clear-stats" in sys.argv or "--reset-stats" in sys.argv:
+        Cache.reset_stats()
+        sys.exit(0)
+    if "--clear-cache" in sys.argv or "--reset-cache" in sys.argv:
+        Cache.reset_cache()
+        sys.exit(0)
 
     cache = Cache(sys.argv[1:])
     cache.run()
